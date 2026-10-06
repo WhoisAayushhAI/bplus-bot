@@ -86,4 +86,3 @@ def analyze():
     send_tg(msg)
 
 analyze()
-    
