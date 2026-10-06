@@ -1,7 +1,5 @@
 name: Bplus Bot
 on:
-  schedule:
-    - cron: '*/15 * * * *'
   workflow_dispatch:
 jobs:
   run:
