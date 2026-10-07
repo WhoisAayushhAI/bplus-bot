@@ -1,6 +1,5 @@
 import os, requests
-from datetime import datetime
-import pytz
+from datetime import datetime, timedelta, timezone
 
 PROXY = (os.getenv("CLOUDFLARE_PROXY") or "https://aayush-proxy.aayushrathod7878.workers.dev").strip().rstrip("/")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -10,13 +9,10 @@ def via_proxy(url):
     try:
         r = requests.get(f"{PROXY}/?url={url}", timeout=20)
         return r.json()
-    except Exception as e:
-        print(f"Err {url}: {e}")
+    except:
         return None
 
 def get_tf_data(bar):
-    # bar = 15m, 1H, 4H
-    # Spot
     spot_url = f"https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar={bar}&limit=2"
     spot = via_proxy(spot_url)
     spot_now = spot_prev = 0
@@ -24,7 +20,6 @@ def get_tf_data(bar):
         spot_now = float(spot["data"][0][4])
         spot_prev = float(spot["data"][1][4])
 
-    # Future SWAP
     fut_url = f"https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar={bar}&limit=2"
     fut = via_proxy(fut_url)
     fut_now = fut_prev = 0
@@ -32,7 +27,6 @@ def get_tf_data(bar):
         fut_now = float(fut["data"][0][4])
         fut_prev = float(fut["data"][1][4])
 
-    # OI History
     oi_url = f"https://www.okx.com/api/v5/public/open-interest-history?instId=BTC-USDT-SWAP&period={bar}&limit=2"
     oi = via_proxy(oi_url)
     oi_now = oi_prev = 0
@@ -50,26 +44,24 @@ def send(msg):
     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                   data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
-# --- FETCH ---
 data_4h = get_tf_data("4H")
 data_1h = get_tf_data("1H")
 data_15m = get_tf_data("15m")
 
-# Current Price
 ticker = via_proxy("https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT")
 price = float(ticker["data"][0]["last"]) if ticker and ticker.get("data") else 0
 
-# Funding
 fund_now_data = via_proxy("https://www.okx.com/api/v5/public/funding-rate?instId=BTC-USDT-SWAP")
 fund_now = float(fund_now_data["data"][0]["fundingRate"]) if fund_now_data and fund_now_data.get("data") else 0
 
 fund_hist = via_proxy("https://www.okx.com/api/v5/public/funding-rate-history?instId=BTC-USDT-SWAP&limit=8")
 fund_1d_avg = 0
 if fund_hist and fund_hist.get("data"):
-    vals = [float(x["fundingRate"]) for x in fund_hist["data"][:3]] # last 3 = ~1 day (8h each)
+    vals = [float(x["fundingRate"]) for x in fund_hist["data"][:3]]
     fund_1d_avg = sum(vals)/len(vals) if vals else 0
 
-ist = pytz.timezone("Asia/Kolkata")
+# IST Time without pytz
+ist = timezone(timedelta(hours=5, minutes=30))
 now_ist = datetime.now(ist).strftime("%d-%m %I:%M:%S %p IST")
 
 msg = f"""📊 *BPLUS MTF*
