@@ -7,40 +7,42 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def via_proxy(url):
     try:
-        full = f"{PROXY}/?url={url}"
-        r = requests.get(full, timeout=20)
+        r = requests.get(f"{PROXY}/?url={url}", timeout=20)
         return r.json()
     except Exception as e:
         print(f"Error {url}: {e}")
         return None
 
-def send_telegram(msg):
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
-    except Exception as e:
-        print(e)
+def send(msg):
+    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                  data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
-print(f"Using PROXY: {PROXY}")
+# OKX Endpoints - Ye sab proxy se chalega
+ticker = via_proxy("https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT")
+oi_data = via_proxy("https://www.okx.com/api/v5/public/open-interest?instId=BTC-USDT-SWAP")
+fund_data = via_proxy("https://www.okx.com/api/v5/public/funding-rate?instId=BTC-USDT-SWAP")
 
-# 1. OKX
-okx_data = via_proxy("https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT")
-okx_last = okx_data["data"][0]["last"] if okx_data and "data" in okx_data else "N/A"
+price = "N/A"
+if ticker and ticker.get("data"):
+    price = ticker["data"][0].get("last","N/A")
 
-# 2. Binance Vision (block-free)
-bn_data = via_proxy("https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT")
-bn_last = bn_data.get("price") if bn_data else "N/A"
+oi = "N/A"
+if oi_data and oi_data.get("data"):
+    oi = oi_data["data"][0].get("oi","N/A")
 
-# 3. Bybit OI
-by_data = via_proxy("https://api.bybit.com/v5/market/open-interest?category=linear&symbol=BTCUSDT&intervalTime=5min&limit=1")
-oi_val = "N/A"
-if by_data and by_data.get("result"):
-    try:
-        oi_val = by_data["result"]["list"][0]["openInterest"]
-    except:
-        pass
+funding = "N/A"
+if fund_data and fund_data.get("data"):
+    funding = fund_data["data"][0].get("fundingRate","N/A")
 
-msg = f"PROXY TEST SUCCESS\nOKX: {okx_last}\nBinanceVision: {bn_last}\nBybit OI: {oi_val}\nTime: {datetime.utcnow()}"
+msg = f"""✅ *BPLUS PROXY FINAL LIVE*
+
+*BTC Price:* {price}
+*OI (BTC-USDT-SWAP):* {oi}
+*Funding:* {funding}
+*Time:* {datetime.utcnow().strftime('%H:%M:%S')} UTC
+
+Ab 4H + 1H + 15M wala Absorption logic isi me add kar denge.
+"""
 
 print(msg)
-send_telegram(msg)
+send(msg)
