@@ -1,5 +1,6 @@
 import os, requests
 from datetime import datetime
+import pytz
 
 PROXY = (os.getenv("CLOUDFLARE_PROXY") or "https://aayush-proxy.aayushrathod7878.workers.dev").strip().rstrip("/")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -9,77 +10,92 @@ def via_proxy(url):
     try:
         r = requests.get(f"{PROXY}/?url={url}", timeout=20)
         return r.json()
-    except:
+    except Exception as e:
+        print(f"Err {url}: {e}")
         return None
 
-def get_candles(tf, limit=2):
-    # tf = 15m, 1H, 4H
-    url = f"https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar={tf}&limit={limit}"
-    data = via_proxy(url)
-    if data and data.get("data"):
-        # data[0]=latest, data[1]=prev
-        latest_close = float(data["data"][0][4])
-        prev_close = float(data["data"][1][4])
-        change = ((latest_close - prev_close) / prev_close) * 100
-        return latest_close, change
-    return None, 0
+def get_tf_data(bar):
+    # bar = 15m, 1H, 4H
+    # Spot
+    spot_url = f"https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar={bar}&limit=2"
+    spot = via_proxy(spot_url)
+    spot_now = spot_prev = 0
+    if spot and spot.get("data") and len(spot["data"])>=2:
+        spot_now = float(spot["data"][0][4])
+        spot_prev = float(spot["data"][1][4])
+
+    # Future SWAP
+    fut_url = f"https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar={bar}&limit=2"
+    fut = via_proxy(fut_url)
+    fut_now = fut_prev = 0
+    if fut and fut.get("data") and len(fut["data"])>=2:
+        fut_now = float(fut["data"][0][4])
+        fut_prev = float(fut["data"][1][4])
+
+    # OI History
+    oi_url = f"https://www.okx.com/api/v5/public/open-interest-history?instId=BTC-USDT-SWAP&period={bar}&limit=2"
+    oi = via_proxy(oi_url)
+    oi_now = oi_prev = 0
+    if oi and oi.get("data") and len(oi["data"])>=2:
+        oi_now = float(oi["data"][0]["oi"])
+        oi_prev = float(oi["data"][1]["oi"])
+
+    return {
+        "spot_now": spot_now, "spot_chg": spot_now - spot_prev,
+        "fut_now": fut_now, "fut_chg": fut_now - fut_prev,
+        "oi_now": oi_now, "oi_chg": oi_now - oi_prev
+    }
 
 def send(msg):
     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                   data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
-# --- MTF DATA ---
-price_15m, chg_15m = get_candles("15m")
-price_1h, chg_1h = get_candles("1H")
-price_4h, chg_4h = get_candles("4H")
+# --- FETCH ---
+data_4h = get_tf_data("4H")
+data_1h = get_tf_data("1H")
+data_15m = get_tf_data("15m")
 
+# Current Price
 ticker = via_proxy("https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT")
-spot_price = float(ticker["data"][0]["last"]) if ticker and ticker.get("data") else 0
+price = float(ticker["data"][0]["last"]) if ticker and ticker.get("data") else 0
 
-swap_ticker = via_proxy("https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT-SWAP")
-fut_price = float(swap_ticker["data"][0]["last"]) if swap_ticker and swap_ticker.get("data") else spot_price
+# Funding
+fund_now_data = via_proxy("https://www.okx.com/api/v5/public/funding-rate?instId=BTC-USDT-SWAP")
+fund_now = float(fund_now_data["data"][0]["fundingRate"]) if fund_now_data and fund_now_data.get("data") else 0
 
-oi_data = via_proxy("https://www.okx.com/api/v5/public/open-interest?instId=BTC-USDT-SWAP")
-oi_now = float(oi_data["data"][0]["oi"]) if oi_data and oi_data.get("data") else 0
+fund_hist = via_proxy("https://www.okx.com/api/v5/public/funding-rate-history?instId=BTC-USDT-SWAP&limit=8")
+fund_1d_avg = 0
+if fund_hist and fund_hist.get("data"):
+    vals = [float(x["fundingRate"]) for x in fund_hist["data"][:3]] # last 3 = ~1 day (8h each)
+    fund_1d_avg = sum(vals)/len(vals) if vals else 0
 
-fund = via_proxy("https://www.okx.com/api/v5/public/funding-rate?instId=BTC-USDT-SWAP")
-funding = float(fund["data"][0]["fundingRate"]) if fund and fund.get("data") else 0
+ist = pytz.timezone("Asia/Kolkata")
+now_ist = datetime.now(ist).strftime("%d-%m %I:%M:%S %p IST")
 
-# --- AI BRAIN / ABSORPTION LOGIC ---
-premium = fut_price - spot_price
-signal = "NEUTRAL"
-reason = ""
+msg = f"""📊 *BPLUS MTF*
 
-# Rule 1: 15M UP but 4H DOWN
-if chg_15m > 0.3 and chg_4h < -0.5:
-    signal = "⚠️ FAKE PUMP / ABSORPTION"
-    reason = f"15M +{chg_15m:.2f}% but 4H {chg_4h:.2f}% DOWN - Bulls trapped"
-elif chg_15m < -0.3 and chg_4h > 0.5:
-    signal = "⚠️ FAKE DUMP / ABSORPTION"
-    reason = f"15M {chg_15m:.2f}% but 4H +{chg_4h:.2f}% UP - Bears trapped"
-elif chg_15m > 0.2 and chg_1h > 0.3 and chg_4h > 0.5:
-    signal = "🚀 STRONG UPTREND"
-    reason = "All TF aligned UP"
-elif chg_15m < -0.2 and chg_1h < -0.3 and chg_4h < -0.5:
-    signal = "🔻 STRONG DOWNTREND"
-    reason = "All TF aligned DOWN"
+*Price:* {price:.1f}
 
-# OI Logic
-oi_note = "OI Stable"
-if oi_now > 3070000: # tu apna threshold dega
-    oi_note = "High OI - Big move coming"
+*4H*
+Future: {data_4h['fut_now']:.1f} ({data_4h['fut_chg']:+.1f})
+Spot: {data_4h['spot_now']:.1f} ({data_4h['spot_chg']:+.1f})
+OI: {data_4h['oi_now']:.0f} ({data_4h['oi_chg']:+.0f})
 
-msg = f"""📊 *BPLUS MTF FINAL*
+*1H*
+Future: {data_1h['fut_now']:.1f} ({data_1h['fut_chg']:+.1f})
+Spot: {data_1h['spot_now']:.1f} ({data_1h['spot_chg']:+.1f})
+OI: {data_1h['oi_now']:.0f} ({data_1h['oi_chg']:+.0f})
 
-*Price:* {spot_price} | Fut: {fut_price} (Prem: {premium:.1f})
-*15M:* {chg_15m:+.2f}% | *1H:* {chg_1h:+.2f}% | *4H:* {chg_4h:+.2f}%
-*OI:* {oi_now:.0f} | *Funding:* {funding:.6f}
+*15M*
+Future: {data_15m['fut_now']:.1f} ({data_15m['fut_chg']:+.1f})
+Spot: {data_15m['spot_now']:.1f} ({data_15m['spot_chg']:+.1f})
+OI: {data_15m['oi_now']:.0f} ({data_15m['oi_chg']:+.0f})
 
-*SIGNAL:* {signal}
-*Logic:* {reason}
-*Note:* {oi_note}
+*Funding*
+Current: {fund_now:.8f}
+1Day Avg: {fund_1d_avg:.8f}
 
-*Time:* {datetime.utcnow().strftime('%H:%M:%S')} UTC
+*Time:* {now_ist}
 """
 
 print(msg)
