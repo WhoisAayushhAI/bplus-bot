@@ -49,8 +49,8 @@ EXPLAIN = [
     (("pce",), "US PCE (Fed ka pasandida inflation number)",
      "Fed isi inflation number ko sabse zyada dekhta hai.",
      "ZYADA = USD strong = Gold/BTC pe dabav ho sakta hai. KAM = Gold/BTC ko support."),
-    (("fomc", "federal funds", "fed chair", "powell"), "FOMC / Fed (byaaj dar ka faisla)",
-     "Fed byaaj dar (interest rate) ka faisla aur Powell ka bayan.",
+    (("fomc", "federal funds", "fed chair", "powell"), "FOMC / Fed (byaaj dar / Fed Chair ka bayan)",
+     "Fed byaaj dar (interest rate) ka faisla, ya Fed Chair ka bhashan/bayan.",
      "Tone SAKHT (hawkish, rate kam nahi karenge) = USD strong = Gold/BTC pe dabav ho sakta hai. "
      "Tone NARM (dovish, rate cut ke sanket) = Gold/BTC ko support. "
      "Market ki ummeed se alag nikla to bada jhatka aata hai. "
@@ -62,7 +62,7 @@ EXPLAIN = [
     (("retail sales",), "US Retail Sales (logon ka kharch)",
      "Log dukanon me kitna kharch kar rahe hain.",
      "ZYADA = majboot economy = USD strong = Gold/BTC pe dabav ho sakta hai. KAM = ulta."),
-    (("ism",), "US ISM PMI (factory/services ki activity)",
+    (("ism manufacturing", "ism services", "ism non-manufacturing"), "US ISM PMI (factory/services ki activity)",
      "50 se upar matlab growth, neeche matlab sikudna.",
      "Forecast se ZYADA = USD strong = Gold/BTC pe dabav ho sakta hai. KAM = Gold/BTC ko support."),
 ]
@@ -125,7 +125,7 @@ def now_text(ev):
     name, _, read = explain(ev["title"])
     return (f"🔔 Abhi aa raha hai / aaya: {name}\n"
             f"Forecast: {ev['forecast']} | Previous: {ev['previous']}\n"
-            "Actual: TradingView ya Forex Factory calendar me dekho (is bot me free me Actual nahi aata)\n\n"
+            "Actual number yahan dekho: https://www.tradingview.com/economic-calendar/\n\n"
             f"Kaise padhein: {read}\n\n"
             "Ye aam tendency hai, kabhi ulta bhi hota hai.")
 
@@ -160,8 +160,15 @@ def main():
     try:
         events = fetch_events()
     except Exception as e:  # noqa
-        print(f"Feed error: {e}")      # chup-chaap nikal jao, agli run me phir try hoga
+        print(f"Feed error: {e}")      # agli run me phir try hoga
+        if TEST:
+            send(f"TEST: Forex Factory feed se data nahi aaya ({str(e)[:100]})")
         return
+
+    up = [x for x in events if x["when"] > now]
+    print(f"Is hafte ki US High impact news: {len(events)} | aage aane wali: {len(up)}")
+    if up:
+        print(f"Agli: {up[0]['title']} | {up[0]['when'].astimezone(IST):%d-%b %I:%M %p} IST")
 
     if TEST:
         up = [e for e in events if e["when"] > now]
@@ -174,7 +181,10 @@ def main():
         return
 
     sent = load_state()
-    for key, text in build_messages(events, now, sent):
+    todo = build_messages(events, now, sent)
+    if not todo:
+        print("Abhi koi alert due nahi (heads-up 60 min pehle, 'abhi aaya' event ke 30 min tak).")
+    for key, text in todo:
         send(text)
         sent.add(key)
     if not DRY:
