@@ -16,15 +16,16 @@ import requests
 from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 
-CZ_KEY = os.environ.get("COINALYZE_API_KEY", "")
-TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
+CZ_KEY = os.environ.get("COINALYZE_API_KEY", "").strip()
+TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
 COIN = "BTC"
 CZ = "https://api.coinalyze.net/v1"
 BV = "https://data-api.binance.vision/api/v3"
 CB = "https://api.exchange.coinbase.com/products/BTC-USD/ticker"
-YF = "https://query1.finance.yahoo.com/v8/finance/chart/"   # DXY / US10Y (free, unofficial)
+YF = "https://query1.finance.yahoo.com/v8/finance/chart/"   # DXY (free, unofficial)
+CNBC = "https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol"  # US10Y 24h (unofficial)
 
 # (naam, coinalyze interval, binance interval, seconds)
 TFS = [("4H", "4hour", "4h", 14400),
@@ -125,6 +126,21 @@ def yahoo_quote(sym):
     return price, prev
 
 
+def cnbc_us10y():
+    """US10Y ka live (24 ghante wala) yield, TradingView jaisa. (level, pichhle din ka close)"""
+    r = requests.get(CNBC, params={"symbols": "US10Y", "requestMethod": "itv", "noform": "1",
+                                   "partnerId": "2", "fund": "1", "exthrs": "1",
+                                   "output": "json", "events": "1"},
+                     headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+    r.raise_for_status()
+    q = r.json()["FormattedQuoteResult"]["FormattedQuote"][0]
+
+    def num(x):
+        return float(str(x).replace("%", "").replace(",", "").strip())
+
+    return num(q["last"]), num(q["previous_day_closing"])
+
+
 def macro_lines():
     out = []
     dxy = safe("DXY", yahoo_quote, "DX-Y.NYB")
@@ -134,12 +150,19 @@ def macro_lines():
         out.append(f"DXY: {p:.2f} ({ch:+.2f}%) {'▲' if ch > 0 else '▼' if ch < 0 else '▬'}")
     else:
         out.append("DXY: NA")
-    y10 = safe("US10Y", yahoo_quote, "^TNX")
+    y10, src = None, ""
+    try:
+        y10 = cnbc_us10y()
+    except Exception as e:  # noqa
+        print(f"US10Y cnbc error: {e}", file=sys.stderr)
+    if not (y10 and y10[1]):
+        y10 = safe("US10Y", yahoo_quote, "^TNX")     # backup: sirf US market hours me live
+        src = " [Yahoo]"
     if y10 and y10[1]:
         p, pv = y10
         ch = (p - pv) / pv * 100
         bps = (p - pv) * 100
-        out.append(f"US10Y: {p:.3f}% ({ch:+.2f}% | {bps:+.1f}bps) {'▲' if ch > 0 else '▼' if ch < 0 else '▬'}")
+        out.append(f"US10Y: {p:.3f}% ({ch:+.2f}% | {bps:+.1f}bps) {'▲' if ch > 0 else '▼' if ch < 0 else '▬'}{src}")
     else:
         out.append("US10Y: NA")
     return out
@@ -384,9 +407,9 @@ def main():
 
     r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
                       data={"chat_id": TG_CHAT, "text": msg}, timeout=30)
-    r.raise_for_status()
+    if not r.ok:                                   # token URL print na ho, isliye raise_for_status nahi
+        sys.exit(f"Telegram error {r.status_code}: {r.text[:200]}")
 
 
 if __name__ == "__main__":
     main()
-       
